@@ -1,298 +1,454 @@
 import { useMemo, useState } from "react";
+
 import {
   Activity,
   BrainCircuit,
   CheckCircle2,
-  ChevronDown,
   CircleDot,
-  Clock3,
   Cpu,
-  GitBranch,
-  Layers3,
+  Gauge,
   Network,
   Play,
   RotateCcw,
   Server,
   Sparkles,
-  Target,
+  Timer,
   TrendingUp,
   Zap,
+  AlertCircle,
 } from "lucide-react";
 
 import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  Legend,
-  Line,
-  LineChart,
   ResponsiveContainer,
-  Tooltip,
+  LineChart,
+  Line,
   XAxis,
   YAxis,
+  CartesianGrid,
+  Tooltip,
+  BarChart,
+  Bar,
+  Legend,
 } from "recharts";
 
 import "./App.css";
 
 
-const topologyInfo = {
-  ring: {
-    name: "Ring",
-    description: "Circular node arrangement",
-  },
-
-  mesh: {
-    name: "Mesh",
-    description: "2D grid interconnection",
-  },
-
-  torus: {
-    name: "Torus",
-    description: "Mesh with wrap-around links",
-  },
-};
+const API_URL = "http://127.0.0.1:8000";
 
 
 const initialResults = {
   ring: {
-    path: 3.24,
-    cost: 42.4,
-    burst: 32.8,
-    predicted: 33.6,
+    path: 0,
+    cost: 0,
+    burst: 0,
+    predicted: 0,
+    diameter: 0,
   },
 
   mesh: {
-    path: 2.10,
-    cost: 31.2,
-    burst: 25.1,
-    predicted: 25.8,
+    path: 0,
+    cost: 0,
+    burst: 0,
+    predicted: 0,
+    diameter: 0,
   },
 
   torus: {
-    path: 1.78,
-    cost: 27.8,
-    burst: 21.4,
-    predicted: 21.9,
+    path: 0,
+    cost: 0,
+    burst: 0,
+    predicted: 0,
+    diameter: 0,
   },
 };
 
 
-function NetworkDiagram({ type }) {
-  if (type === "ring") {
-    return (
-      <div className="network-visual ring-visual">
-        <div className="ring-node ring-a">0</div>
-        <div className="ring-node ring-b">1</div>
-        <div className="ring-node ring-c">2</div>
-        <div className="ring-node ring-d">3</div>
-
-        <span className="ring-edge edge-a" />
-        <span className="ring-edge edge-b" />
-        <span className="ring-edge edge-c" />
-        <span className="ring-edge edge-d" />
-      </div>
-    );
+function formatNumber(value, digits = 3) {
+  if (
+    value === null ||
+    value === undefined ||
+    Number.isNaN(Number(value))
+  ) {
+    return "—";
   }
 
-
-  if (type === "mesh") {
-    return (
-      <div className="network-visual grid-visual">
-        <div className="grid-lines horizontal h1" />
-        <div className="grid-lines horizontal h2" />
-        <div className="grid-lines horizontal h3" />
-
-        <div className="grid-lines vertical v1" />
-        <div className="grid-lines vertical v2" />
-        <div className="grid-lines vertical v3" />
-
-        {Array.from({ length: 9 }).map((_, index) => (
-          <div className="grid-node" key={index}>
-            {index}
-          </div>
-        ))}
-      </div>
-    );
-  }
-
-
-  return (
-    <div className="network-visual torus-visual">
-
-      <div className="torus-lines">
-        <div className="grid-lines horizontal h1" />
-        <div className="grid-lines horizontal h2" />
-        <div className="grid-lines horizontal h3" />
-
-        <div className="grid-lines vertical v1" />
-        <div className="grid-lines vertical v2" />
-        <div className="grid-lines vertical v3" />
-
-        {Array.from({ length: 9 }).map((_, index) => (
-          <div className="grid-node" key={index}>
-            {index}
-          </div>
-        ))}
-      </div>
-
-      <div className="torus-arrow torus-top">↔</div>
-      <div className="torus-arrow torus-right">↕</div>
-
-    </div>
-  );
-}
-
-
-function Metric({ label, value, unit }) {
-  return (
-    <div className="metric">
-
-      <span>{label}</span>
-
-      <div>
-        <strong>{value}</strong>
-        <small>{unit}</small>
-      </div>
-
-    </div>
-  );
+  return Number(value).toFixed(digits);
 }
 
 
 function App() {
 
-  const [nodes, setNodes] = useState("16");
-  const [pattern, setPattern] = useState("Random");
-  const [requests, setRequests] = useState("50");
-  const [workers, setWorkers] = useState("4");
+  const [nodes, setNodes] = useState(9);
 
-  const [running, setRunning] = useState(false);
-  const [hasRun, setHasRun] = useState(false);
+  const [pattern, setPattern] =
+    useState("local");
 
-  const [results, setResults] = useState(initialResults);
+  const [requests, setRequests] =
+    useState(40);
+
+  const [workers, setWorkers] =
+    useState(4);
+
+  const [results, setResults] =
+    useState(initialResults);
+
+  const [aiBest, setAiBest] =
+    useState(null);
+
+  const [actualBest, setActualBest] =
+    useState(null);
+
+  const [mae, setMae] =
+    useState(null);
+
+  const [performance, setPerformance] =
+    useState(null);
+
+  const [verification, setVerification] =
+    useState(null);
+
+  const [loading, setLoading] =
+    useState(false);
+
+  const [error, setError] =
+    useState("");
+
+  const [hasRun, setHasRun] =
+    useState(false);
 
 
-  const actualBest = useMemo(() => {
+  const workerChartData = useMemo(() => {
 
-    return Object.entries(results).reduce(
-      (best, [key, value]) =>
-        value.burst < results[best].burst ? key : best,
-      "ring"
+    if (
+      !performance ||
+      !performance.worker_performance
+    ) {
+      return [];
+    }
+
+    return performance.worker_performance.map(
+      (item) => ({
+        workers: item.workers,
+
+        execution: Number(
+          item.execution_time
+        ),
+
+        speedup: Number(
+          item.speedup
+        ),
+
+        efficiency: Number(
+          item.efficiency
+        ),
+      })
     );
+
+  }, [performance]);
+
+
+  const predictionChartData = useMemo(() => {
+
+    return [
+      {
+        topology: "Ring",
+
+        predicted:
+          Number(
+            results.ring.predicted
+          ),
+
+        actual:
+          Number(
+            results.ring.burst
+          ),
+      },
+
+      {
+        topology: "Mesh",
+
+        predicted:
+          Number(
+            results.mesh.predicted
+          ),
+
+        actual:
+          Number(
+            results.mesh.burst
+          ),
+      },
+
+      {
+        topology: "Torus",
+
+        predicted:
+          Number(
+            results.torus.predicted
+          ),
+
+        actual:
+          Number(
+            results.torus.burst
+          ),
+      },
+    ];
 
   }, [results]);
 
 
-  const aiBest = useMemo(() => {
+  async function runAnalysis() {
 
-    return Object.entries(results).reduce(
-      (best, [key, value]) =>
-        value.predicted < results[best].predicted ? key : best,
-      "ring"
-    );
+    setLoading(true);
 
-  }, [results]);
+    setError("");
 
+    try {
 
-  const speedupData = [
-    {
-      workers: "1",
-      time: 8.4,
-    },
-    {
-      workers: "2",
-      time: 5.2,
-    },
-    {
-      workers: "4",
-      time: 3.2,
-    },
-    {
-      workers: "8",
-      time: 2.7,
-    },
-  ];
+      const response = await fetch(
+        `${API_URL}/analyze`,
+        {
+          method: "POST",
 
+          headers: {
+            "Content-Type":
+              "application/json",
+          },
 
-  const topologyChartData = [
-    {
-      topology: "Ring",
-      actual: results.ring.burst,
-      predicted: results.ring.predicted,
-    },
-    {
-      topology: "Mesh",
-      actual: results.mesh.burst,
-      predicted: results.mesh.predicted,
-    },
-    {
-      topology: "Torus",
-      actual: results.torus.burst,
-      predicted: results.torus.predicted,
-    },
-  ];
+          body: JSON.stringify({
+            nodes: Number(nodes),
+
+            pattern,
+
+            requests: Number(requests),
+
+            workers: Number(workers),
+          }),
+        }
+      );
 
 
-  const runAnalysis = () => {
+      if (!response.ok) {
 
-    setRunning(true);
-    setHasRun(false);
+        let message =
+          "Backend analysis failed.";
 
-    setTimeout(() => {
+        try {
 
-      setRunning(false);
-      setHasRun(true);
+          const errorData =
+            await response.json();
+
+          message =
+            errorData.detail ||
+            message;
+
+        } catch {
+
+          // Keep default error message.
+        }
+
+        throw new Error(message);
+      }
+
+
+      const data =
+        await response.json();
+
+
+      const backendResults =
+        data.actual.results;
+
 
       setResults({
+
         ring: {
-          path: 3.24,
-          cost: 42.4,
-          burst: 32.8,
-          predicted: 33.6,
+
+          path:
+            backendResults.ring
+              .average_path,
+
+          cost:
+            backendResults.ring
+              .communication_cost,
+
+          burst:
+            backendResults.ring
+              .burst_time,
+
+          predicted:
+            data.ai.predictions.ring,
+
+          diameter:
+            backendResults.ring
+              .diameter,
         },
+
 
         mesh: {
-          path: 2.10,
-          cost: 31.2,
-          burst: 25.1,
-          predicted: 25.8,
+
+          path:
+            backendResults.mesh
+              .average_path,
+
+          cost:
+            backendResults.mesh
+              .communication_cost,
+
+          burst:
+            backendResults.mesh
+              .burst_time,
+
+          predicted:
+            data.ai.predictions.mesh,
+
+          diameter:
+            backendResults.mesh
+              .diameter,
         },
+
 
         torus: {
-          path: 1.78,
-          cost: 27.8,
-          burst: 21.4,
-          predicted: 21.9,
+
+          path:
+            backendResults.torus
+              .average_path,
+
+          cost:
+            backendResults.torus
+              .communication_cost,
+
+          burst:
+            backendResults.torus
+              .burst_time,
+
+          predicted:
+            data.ai.predictions.torus,
+
+          diameter:
+            backendResults.torus
+              .diameter,
         },
+
       });
 
-    }, 1400);
-  };
+
+      setAiBest(
+        data.ai.recommended
+      );
 
 
-  const resetAnalysis = () => {
+      setActualBest(
+        data.actual.best
+      );
+
+
+      setMae(
+        data.ai.mae
+      );
+
+
+      setPerformance(
+        data.performance
+      );
+
+
+      setVerification(
+        data.verification
+      );
+
+
+      setHasRun(true);
+
+    } catch (err) {
+
+      console.error(err);
+
+      setError(
+        err.message ||
+        "Unable to connect to backend."
+      );
+
+    } finally {
+
+      setLoading(false);
+    }
+  }
+
+
+  function resetAnalysis() {
+
+    setResults(
+      initialResults
+    );
+
+    setAiBest(null);
+
+    setActualBest(null);
+
+    setMae(null);
+
+    setPerformance(null);
+
+    setVerification(null);
+
+    setError("");
 
     setHasRun(false);
-    setRunning(false);
-
-    setNodes("16");
-    setPattern("Random");
-    setRequests("50");
-    setWorkers("4");
-
-    setResults(initialResults);
-  };
+  }
 
 
-  const isCorrect = aiBest === actualBest;
+  const topologyCards = [
+
+    {
+      key: "ring",
+
+      name: "Ring",
+
+      icon: CircleDot,
+
+      description:
+        "Simple circular connection with two neighbors per node.",
+
+      result:
+        results.ring,
+    },
+
+
+    {
+      key: "mesh",
+
+      name: "Mesh",
+
+      icon: Network,
+
+      description:
+        "Structured grid providing multiple short local paths.",
+
+      result:
+        results.mesh,
+    },
+
+
+    {
+      key: "torus",
+
+      name: "Torus",
+
+      icon: Activity,
+
+      description:
+        "Mesh with wrap-around links for shorter boundary paths.",
+
+      result:
+        results.torus,
+    },
+
+  ];
 
 
   return (
-    <div className="app-shell">
 
-      <div className="background-grid" />
-      <div className="background-glow glow-purple" />
-      <div className="background-glow glow-blue" />
+    <div className="app-shell">
 
 
       {/* HEADER */}
@@ -302,27 +458,39 @@ function App() {
         <div className="brand">
 
           <div className="brand-mark">
-            <BrainCircuit size={24} />
+
+            <BrainCircuit size={21} />
+
           </div>
 
+
           <div>
-            <h1>AI Network Selector</h1>
-            <p>Interconnection Network Intelligence</p>
+
+            <div className="brand-title">
+              AI Network Selector
+            </div>
+
+            <div className="brand-subtitle">
+              Parallel topology intelligence
+            </div>
+
           </div>
 
         </div>
 
 
-        <div className="topbar-right">
+        <div className="header-right">
 
-          <div className="system-status">
-            <span className="status-light" />
+          <div className="status-pill">
+
+            <span className="status-dot" />
+
             System Online
+
           </div>
 
-          <div className="header-divider" />
 
-          <div className="project-name">
+          <div className="case-label">
             Case Study 09
           </div>
 
@@ -331,52 +499,62 @@ function App() {
       </header>
 
 
-      <main className="page">
+      <main className="main-content">
 
 
         {/* HERO */}
 
-        <section className="hero-section">
+        <section className="hero">
 
           <div className="hero-copy">
 
-            <div className="hero-kicker">
-              <Sparkles size={14} />
-              DISTRIBUTED & PARALLEL COMPUTING
+            <div className="eyebrow">
+
+              <Sparkles size={15} />
+
+              AI-assisted parallel computing
+
             </div>
 
-            <h2>
+
+            <h1>
+
               Intelligent topology
-              <span> selection.</span>
-            </h2>
+
+              <span>
+                {" "}selection.
+              </span>
+
+            </h1>
+
 
             <p>
-              Simulate interconnection networks, measure communication
-              performance, and use machine learning to identify the
-              most suitable topology for your parallel workload.
+
+              Simulate Ring, Mesh and Torus
+              interconnection networks, measure
+              communication performance and use
+              a Random Forest model to predict the
+              most suitable topology.
+
             </p>
 
           </div>
 
 
-          <div className="hero-mini-stats">
+          <div className="hero-chip">
+
+            <Zap size={18} />
 
             <div>
-              <Network size={17} />
-              <strong>3</strong>
-              <span>Topologies</span>
-            </div>
 
-            <div>
-              <Server size={17} />
-              <strong>{nodes}</strong>
-              <span>Nodes</span>
-            </div>
+              <strong>
+                Real-time simulation
+              </strong>
 
-            <div>
-              <BrainCircuit size={17} />
-              <strong>RF</strong>
-              <span>AI Model</span>
+              <span>
+                AI prediction + verification
+              </span>
+
             </div>
 
           </div>
@@ -384,408 +562,540 @@ function App() {
         </section>
 
 
-        {/* CONFIGURATION */}
+        {/* ERROR */}
 
-        <section className="main-grid">
+        {error && (
 
+          <div className="error-banner">
 
-          <div className="card config-card">
+            <AlertCircle size={20} />
 
-            <div className="card-heading">
+            <div>
 
-              <div className="heading-left">
-
-                <div className="heading-icon">
-                  <Cpu size={18} />
-                </div>
-
-                <div>
-                  <span className="eyebrow-number">01</span>
-                  <h3>Simulation Configuration</h3>
-                </div>
-
-              </div>
-
-              <span className="configuration-tag">
-                INPUT
-              </span>
-
-            </div>
-
-
-            <div className="form-grid">
-
-              <div className="field">
-
-                <label>
-                  <Server size={13} />
-                  Number of Nodes
-                </label>
-
-                <div className="select-wrapper">
-
-                  <select
-                    value={nodes}
-                    onChange={(e) => setNodes(e.target.value)}
-                  >
-                    <option value="4">4 Nodes</option>
-                    <option value="9">9 Nodes</option>
-                    <option value="16">16 Nodes</option>
-                    <option value="25">25 Nodes</option>
-                  </select>
-
-                  <ChevronDown size={15} />
-
-                </div>
-
-              </div>
-
-
-              <div className="field">
-
-                <label>
-                  <GitBranch size={13} />
-                  Communication Pattern
-                </label>
-
-                <div className="select-wrapper">
-
-                  <select
-                    value={pattern}
-                    onChange={(e) => setPattern(e.target.value)}
-                  >
-                    <option>Local</option>
-                    <option>Random</option>
-                    <option>Global</option>
-                  </select>
-
-                  <ChevronDown size={15} />
-
-                </div>
-
-              </div>
-
-
-              <div className="field">
-
-                <label>
-                  <Activity size={13} />
-                  Communication Requests
-                </label>
-
-                <input
-                  type="number"
-                  min="1"
-                  value={requests}
-                  onChange={(e) => setRequests(e.target.value)}
-                />
-
-              </div>
-
-
-              <div className="field">
-
-                <label>
-                  <Layers3 size={13} />
-                  Parallel Workers
-                </label>
-
-                <div className="select-wrapper">
-
-                  <select
-                    value={workers}
-                    onChange={(e) => setWorkers(e.target.value)}
-                  >
-                    <option value="1">1 Worker</option>
-                    <option value="2">2 Workers</option>
-                    <option value="4">4 Workers</option>
-                    <option value="8">8 Workers</option>
-                  </select>
-
-                  <ChevronDown size={15} />
-
-                </div>
-
-              </div>
-
-            </div>
-
-
-            <div className="configuration-summary">
-
-              <div>
-                <span>Topology Set</span>
-                <strong>Ring · Mesh · Torus</strong>
-              </div>
-
-              <div>
-                <span>AI Model</span>
-                <strong>Random Forest</strong>
-              </div>
-
-            </div>
-
-
-            <div className="button-row">
-
-              <button
-                className="primary-button"
-                onClick={runAnalysis}
-                disabled={running}
-              >
-
-                {running ? (
-                  <>
-                    <span className="button-spinner" />
-                    Running Simulation
-                  </>
-                ) : (
-                  <>
-                    <Play size={17} fill="currentColor" />
-                    Run AI Analysis
-                  </>
-                )}
-
-              </button>
-
-
-              <button
-                className="secondary-button"
-                onClick={resetAnalysis}
-              >
-                <RotateCcw size={16} />
-                Reset
-              </button>
-
-            </div>
-
-          </div>
-
-
-          {/* AI CARD */}
-
-          <div className="card ai-card">
-
-            <div className="ai-background-circle" />
-
-            <div className="ai-heading">
-
-              <div className="ai-icon">
-                <BrainCircuit size={21} />
-              </div>
-
-              <div>
-                <span>AI ENGINE</span>
-                <strong>Random Forest</strong>
-              </div>
-
-              <div className="ai-live">
-                <span />
-                READY
-              </div>
-
-            </div>
-
-
-            <div className="ai-result-label">
-              RECOMMENDED TOPOLOGY
-            </div>
-
-
-            <div className="ai-best">
-
-              <div>
-
-                <div className="ai-best-icon">
-                  <Network size={27} />
-                </div>
-
-                <div>
-                  <h3>
-                    {topologyInfo[aiBest].name}
-                  </h3>
-
-                  <p>
-                    {topologyInfo[aiBest].description}
-                  </p>
-                </div>
-
-              </div>
-
-              <Target size={26} />
-
-            </div>
-
-
-            <div className="ai-numbers">
-
-              <div>
-                <span>Predicted Burst</span>
-                <strong>
-                  {results[aiBest].predicted}
-                  <small> ms</small>
-                </strong>
-              </div>
-
-              <div>
-                <span>Communication Cost</span>
-                <strong>
-                  {results[aiBest].cost}
-                </strong>
-              </div>
-
-            </div>
-
-
-            <div className="ai-explanation">
-
-              <CircleDot size={14} />
+              <strong>
+                Analysis failed
+              </strong>
 
               <p>
-                The AI predicts the lowest burst time for
-                <b> {topologyInfo[aiBest].name}</b> under the
-                selected workload.
+                {error}
               </p>
 
             </div>
 
           </div>
 
-        </section>
+        )}
 
 
-        {/* TOPOLOGY SECTION */}
+        {/* CONFIGURATION */}
 
-        <section className="section-block">
+        <section className="section">
 
-          <div className="section-header">
+          <div className="section-heading">
 
             <div>
 
-              <div className="section-number">
-                02
+              <div className="section-kicker">
+                01 / CONFIGURATION
               </div>
 
-              <div>
-                <h3>Topology Simulation</h3>
+              <h2>
+                Simulation Configuration
+              </h2>
+
+            </div>
+
+
+            <span className="section-note">
+              Define the workload
+            </span>
+
+          </div>
+
+
+          <div className="config-card">
+
+
+            <div className="form-group">
+
+              <label>
+                Number of Nodes
+              </label>
+
+
+              <select
+                value={nodes}
+                onChange={(e) =>
+                  setNodes(
+                    Number(
+                      e.target.value
+                    )
+                  )
+                }
+              >
+
+                <option value={4}>
+                  4 nodes
+                </option>
+
+                <option value={9}>
+                  9 nodes
+                </option>
+
+                <option value={16}>
+                  16 nodes
+                </option>
+
+                <option value={25}>
+                  25 nodes
+                </option>
+
+              </select>
+
+            </div>
+
+
+            <div className="form-group">
+
+              <label>
+                Communication Pattern
+              </label>
+
+
+              <select
+                value={pattern}
+                onChange={(e) =>
+                  setPattern(
+                    e.target.value
+                  )
+                }
+              >
+
+                <option value="local">
+                  Local
+                </option>
+
+                <option value="random">
+                  Random
+                </option>
+
+                <option value="global">
+                  Global
+                </option>
+
+              </select>
+
+            </div>
+
+
+            <div className="form-group">
+
+              <label>
+                Communication Requests
+              </label>
+
+
+              <input
+                type="number"
+                min="1"
+                max="500"
+                value={requests}
+                onChange={(e) =>
+                  setRequests(
+                    Number(
+                      e.target.value
+                    )
+                  )
+                }
+              />
+
+            </div>
+
+
+            <div className="form-group">
+
+              <label>
+                Parallel Workers
+              </label>
+
+
+              <select
+                value={workers}
+                onChange={(e) =>
+                  setWorkers(
+                    Number(
+                      e.target.value
+                    )
+                  )
+                }
+              >
+
+                <option value={1}>
+                  1 worker
+                </option>
+
+                <option value={2}>
+                  2 workers
+                </option>
+
+                <option value={4}>
+                  4 workers
+                </option>
+
+                <option value={8}>
+                  8 workers
+                </option>
+
+              </select>
+
+            </div>
+
+
+            <div className="config-actions">
+
+
+              <button
+                className="primary-btn"
+                onClick={runAnalysis}
+                disabled={loading}
+              >
+
+                {loading ? (
+
+                  <>
+
+                    <span className="spinner" />
+
+                    Running...
+
+                  </>
+
+                ) : (
+
+                  <>
+
+                    <Play size={17} />
+
+                    Run AI Analysis
+
+                  </>
+
+                )}
+
+              </button>
+
+
+              <button
+                className="secondary-btn"
+                onClick={resetAnalysis}
+                disabled={loading}
+              >
+
+                <RotateCcw size={16} />
+
+                Reset
+
+              </button>
+
+
+            </div>
+
+          </div>
+
+        </section>
+
+
+        {/* AI ENGINE */}
+
+        <section className="section">
+
+
+          <div className="section-heading">
+
+            <div>
+
+              <div className="section-kicker">
+                02 / AI ENGINE
+              </div>
+
+              <h2>
+                AI Recommendation
+              </h2>
+
+            </div>
+
+
+            <span className="model-tag">
+              Random Forest Regressor
+            </span>
+
+          </div>
+
+
+          <div className="ai-grid">
+
+
+            <div className="ai-main-card">
+
+
+              <div className="ai-icon">
+
+                <BrainCircuit size={25} />
+
+              </div>
+
+
+              <div className="ai-main-content">
+
+                <span className="muted-label">
+                  Recommended topology
+                </span>
+
+
+                <div className="recommendation">
+
+                  {aiBest
+                    ? aiBest.toUpperCase()
+                    : "RUN ANALYSIS"}
+
+                </div>
+
+
                 <p>
-                  Communication structure and measured performance
+
+                  {aiBest
+
+                    ? `The AI model predicts ${aiBest} will have the lowest burst time for the selected workload.`
+
+                    : "Configure the workload and run the AI analysis to generate a recommendation."}
+
                 </p>
+
               </div>
 
             </div>
 
 
-            <div className="simulation-status">
+            <div className="metric-card">
 
-              {running ? (
-                <>
-                  <span className="status-pulse running" />
-                  Simulation Running
-                </>
-              ) : (
-                <>
-                  <span className="status-pulse" />
-                  Simulation Ready
-                </>
-              )}
+
+              <div className="metric-icon">
+
+                <Timer size={19} />
+
+              </div>
+
+
+              <span className="muted-label">
+                AI predicted burst
+              </span>
+
+
+              <strong>
+
+                {aiBest
+                  ? `${formatNumber(
+                      results[aiBest]
+                        ?.predicted
+                    )}`
+                  : "—"}
+
+              </strong>
+
+
+              <small>
+                simulated units
+              </small>
 
             </div>
+
+
+            <div className="metric-card">
+
+
+              <div className="metric-icon">
+
+                <Gauge size={19} />
+
+              </div>
+
+
+              <span className="muted-label">
+                Model MAE
+              </span>
+
+
+              <strong>
+
+                {mae !== null
+                  ? formatNumber(
+                      mae,
+                      4
+                    )
+                  : "—"}
+
+              </strong>
+
+
+              <small>
+                lower is better
+              </small>
+
+            </div>
+
+          </div>
+
+        </section>
+
+
+        {/* TOPOLOGIES */}
+
+        <section className="section">
+
+
+          <div className="section-heading">
+
+            <div>
+
+              <div className="section-kicker">
+                03 / TOPOLOGY SIMULATION
+              </div>
+
+              <h2>
+                Network Comparison
+              </h2>
+
+            </div>
+
+
+            <span className="section-note">
+              Same workload for every topology
+            </span>
 
           </div>
 
 
           <div className="topology-grid">
 
-            {Object.entries(topologyInfo).map(
-              ([key, info]) => {
 
-                const result = results[key];
+            {topologyCards.map(
+              (card) => {
 
-                const selected = aiBest === key;
+                const Icon =
+                  card.icon;
+
+                const isSelected =
+                  aiBest === card.key;
+
 
                 return (
 
                   <div
-                    className={`topology-card ${
-                      selected ? "ai-selected" : ""
-                    }`}
-                    key={key}
+                    className={
+                      `topology-card ${
+                        isSelected
+                          ? "selected"
+                          : ""
+                      }`
+                    }
+
+                    key={card.key}
                   >
 
-                    {selected && (
-                      <div className="ai-selected-label">
-                        <Sparkles size={11} />
-                        AI SELECTED
-                      </div>
-                    )}
 
+                    <div className="topology-header">
 
-                    <div className="topology-card-heading">
 
                       <div className="topology-name">
 
-                        <div className="topology-symbol">
-                          <Network size={17} />
+
+                        <div className="topology-icon">
+
+                          <Icon size={20} />
+
                         </div>
 
+
                         <div>
-                          <h4>{info.name}</h4>
-                          <span>{info.description}</span>
+
+                          <h3>
+                            {card.name}
+                          </h3>
+
+                          <p>
+                            {card.description}
+                          </p>
+
                         </div>
 
                       </div>
 
+
+                      {isSelected && (
+
+                        <span className="selected-badge">
+
+                          <Sparkles size={13} />
+
+                          AI Selected
+
+                        </span>
+
+                      )}
+
                     </div>
 
 
-                    <NetworkDiagram type={key} />
+                    <div className="network-preview">
 
-
-                    <div className="metric-grid">
-
-                      <Metric
-                        label="Avg. Path"
-                        value={result.path}
-                        unit="hops"
-                      />
-
-                      <Metric
-                        label="Comm. Cost"
-                        value={result.cost}
-                        unit="units"
-                      />
-
-                      <Metric
-                        label="Burst Time"
-                        value={result.burst}
-                        unit="ms"
+                      <TopologyDiagram
+                        type={card.key}
                       />
 
                     </div>
 
 
-                    <div className="card-bottom-status">
+                    <div className="topology-stats">
 
-                      <span
-                        className={
-                          result.burst ===
-                          results[actualBest].burst
-                            ? "best-status"
-                            : ""
+
+                      <Stat
+                        label="Avg Path"
+                        value={
+                          formatNumber(
+                            card.result.path
+                          )
                         }
-                      >
+                      />
 
-                        {result.burst ===
-                        results[actualBest].burst
-                          ? "● Actual Best"
-                          : "● Simulated"}
 
-                      </span>
+                      <Stat
+                        label="Comm Cost"
+                        value={
+                          formatNumber(
+                            card.result.cost
+                          )
+                        }
+                      />
 
-                      <span>
-                        {result.predicted.toFixed(1)} ms AI
-                      </span>
+
+                      <Stat
+                        label="Burst Time"
+                        value={
+                          formatNumber(
+                            card.result.burst
+                          )
+                        }
+                      />
+
+
+                      <Stat
+                        label="Diameter"
+                        value={
+                          card.result.diameter ||
+                          "—"
+                        }
+                      />
+
 
                     </div>
 
@@ -803,317 +1113,459 @@ function App() {
 
         {/* PERFORMANCE */}
 
-        <section className="section-block">
+        <section className="section">
 
-          <div className="section-header">
+
+          <div className="section-heading">
 
             <div>
 
-              <div className="section-number">
-                03
+              <div className="section-kicker">
+                04 / PARALLEL PERFORMANCE
               </div>
 
-              <div>
-                <h3>Parallel Performance</h3>
-                <p>
-                  Runtime, speedup and resource utilization
-                </p>
-              </div>
+              <h2>
+                Performance Analysis
+              </h2>
 
             </div>
+
+
+            <span className="section-note">
+              Workers vs execution
+            </span>
 
           </div>
 
 
-          <div className="stats-grid">
-
-            <div className="performance-stat">
-
-              <div className="stat-top">
-                <div className="stat-icon">
-                  <Clock3 size={17} />
-                </div>
-
-                <span className="positive">
-                  ↓ 61%
-                </span>
-              </div>
-
-              <span className="stat-label">
-                Execution Time
-              </span>
-
-              <strong>
-                3.21 <small>sec</small>
-              </strong>
-
-              <p>
-                Compared with sequential execution
-              </p>
-
-            </div>
+          <div className="performance-grid">
 
 
-            <div className="performance-stat">
-
-              <div className="stat-top">
-                <div className="stat-icon">
-                  <Zap size={17} />
-                </div>
-
-                <span className="neutral">
-                  PARALLEL
-                </span>
-              </div>
-
-              <span className="stat-label">
-                Speedup
-              </span>
-
-              <strong>
-                2.81 <small>×</small>
-              </strong>
-
-              <p>
-                Improvement over baseline
-              </p>
-
-            </div>
+            <PerformanceCard
+              icon={Timer}
+              label="Execution Time"
+              value={
+                performance
+                  ? `${formatNumber(
+                      performance.parallel_time,
+                      4
+                    )} s`
+                  : "—"
+              }
+            />
 
 
-            <div className="performance-stat">
-
-              <div className="stat-top">
-                <div className="stat-icon">
-                  <TrendingUp size={17} />
-                </div>
-
-                <span className="positive">
-                  GOOD
-                </span>
-              </div>
-
-              <span className="stat-label">
-                Efficiency
-              </span>
-
-              <strong>
-                70.3 <small>%</small>
-              </strong>
-
-              <p>
-                With {workers} parallel workers
-              </p>
-
-            </div>
+            <PerformanceCard
+              icon={TrendingUp}
+              label="Speedup"
+              value={
+                performance
+                  ? `${formatNumber(
+                      performance.speedup
+                    )}×`
+                  : "—"
+              }
+            />
 
 
-            <div className="performance-stat">
+            <PerformanceCard
+              icon={Gauge}
+              label="Efficiency"
+              value={
+                performance
+                  ? `${formatNumber(
+                      performance.efficiency,
+                      1
+                    )}%`
+                  : "—"
+              }
+            />
 
-              <div className="stat-top">
-                <div className="stat-icon">
-                  <Network size={17} />
-                </div>
 
-                <span className="neutral">
-                  TOPOLOGY
-                </span>
-              </div>
+            <PerformanceCard
+              icon={Server}
+              label="Workers"
+              value={
+                hasRun
+                  ? workers
+                  : "—"
+              }
+            />
 
-              <span className="stat-label">
-                Network Diameter
-              </span>
-
-              <strong>
-                4 <small>hops</small>
-              </strong>
-
-              <p>
-                Maximum shortest path
-              </p>
-
-            </div>
 
           </div>
 
 
           <div className="charts-grid">
 
-            {/* SPEEDUP CHART */}
+
+            {/* WORKER CHART */}
 
             <div className="chart-card">
 
-              <div className="chart-card-header">
 
-                <div className="chart-title-icon">
-                  <TrendingUp size={16} />
-                </div>
+              <div className="chart-heading">
+
 
                 <div>
-                  <h4>Workers vs Execution Time</h4>
+
+                  <h3>
+                    Workers vs Execution Time
+                  </h3>
+
                   <p>
-                    Parallel scheduler performance
+                    Lower execution time indicates
+                    better parallel performance.
                   </p>
+
                 </div>
+
+
+                <Cpu size={19} />
 
               </div>
 
 
-              <ResponsiveContainer
-                width="100%"
-                height={270}
-              >
+              <div className="chart">
 
-                <LineChart
-                  data={speedupData}
-                  margin={{
-                    top: 10,
-                    right: 10,
-                    left: -20,
-                    bottom: 5,
-                  }}
-                >
 
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    stroke="rgba(255,255,255,0.06)"
-                  />
+                {workerChartData.length > 0 ? (
 
-                  <XAxis
-                    dataKey="workers"
-                    stroke="#657086"
-                    tickLine={false}
-                    axisLine={false}
-                    fontSize={11}
-                  />
+                  <ResponsiveContainer
+                    width="100%"
+                    height="100%"
+                  >
 
-                  <YAxis
-                    stroke="#657086"
-                    tickLine={false}
-                    axisLine={false}
-                    fontSize={11}
-                  />
+                    <LineChart
+                      data={
+                        workerChartData
+                      }
 
-                  <Tooltip
-                    contentStyle={{
-                      background: "#12172a",
-                      border:
-                        "1px solid rgba(255,255,255,0.1)",
-                      borderRadius: "10px",
-                      color: "#fff",
-                    }}
-                  />
+                      margin={{
+                        top: 10,
+                        right: 10,
+                        left: 0,
+                        bottom: 5,
+                      }}
+                    >
 
-                  <Line
-                    type="monotone"
-                    dataKey="time"
-                    name="Execution Time"
-                    stroke="#9b7cff"
-                    strokeWidth={3}
-                    dot={{
-                      r: 4,
-                      fill: "#9b7cff",
-                    }}
-                    activeDot={{
-                      r: 6,
-                    }}
-                  />
+                      <CartesianGrid
+                        strokeDasharray="3 3"
+                        opacity={0.15}
+                      />
 
-                </LineChart>
 
-              </ResponsiveContainer>
+                      <XAxis
+                        dataKey="workers"
+
+                        tick={{
+                          fill: "#687487",
+                          fontSize: 11,
+                        }}
+
+                        axisLine={{
+                          stroke:
+                            "rgba(255,255,255,0.12)",
+                        }}
+
+                        tickLine={false}
+                      />
+
+
+                      <YAxis
+
+                        tick={{
+                          fill: "#687487",
+                          fontSize: 11,
+                        }}
+
+                        axisLine={{
+                          stroke:
+                            "rgba(255,255,255,0.12)",
+                        }}
+
+                        tickLine={false}
+                      />
+
+
+                      <Tooltip
+                        contentStyle={{
+                          backgroundColor:
+                            "#111722",
+
+                          border:
+                            "1px solid rgba(255,255,255,0.1)",
+
+                          borderRadius:
+                            "8px",
+
+                          color:
+                            "#e8edf5",
+                        }}
+
+                        labelStyle={{
+                          color:
+                            "#cfd5e0",
+                        }}
+
+                        itemStyle={{
+                          color:
+                            "#cfd5e0",
+                        }}
+                      />
+
+
+                      <Line
+                        type="monotone"
+
+                        dataKey="execution"
+
+                        name="Execution Time"
+
+                        stroke="#6d78ff"
+
+                        strokeWidth={3}
+
+                        dot={{
+                          r: 4,
+                          fill: "#6d78ff",
+                          strokeWidth: 0,
+                        }}
+
+                        activeDot={{
+                          r: 6,
+                        }}
+                      />
+
+
+                    </LineChart>
+
+                  </ResponsiveContainer>
+
+                ) : (
+
+                  <EmptyChart />
+
+                )}
+
+              </div>
 
             </div>
 
 
-            {/* AI CHART */}
+            {/* AI PREDICTION CHART */}
 
             <div className="chart-card">
 
-              <div className="chart-card-header">
 
-                <div className="chart-title-icon">
-                  <BrainCircuit size={16} />
-                </div>
+              <div className="chart-heading">
+
 
                 <div>
-                  <h4>AI Prediction vs Actual</h4>
+
+                  <h3>
+                    AI Prediction vs Actual
+                  </h3>
+
                   <p>
-                    Burst-time model verification
+                    Verification of predicted burst time.
                   </p>
+
                 </div>
+
+
+                <BrainCircuit size={19} />
 
               </div>
 
 
-              <ResponsiveContainer
-                width="100%"
-                height={270}
-              >
+              <div className="chart">
 
-                <BarChart
-                  data={topologyChartData}
-                  margin={{
-                    top: 10,
-                    right: 10,
-                    left: -20,
-                    bottom: 5,
-                  }}
-                >
 
-                  <CartesianGrid
-                    strokeDasharray="3 3"
-                    stroke="rgba(255,255,255,0.06)"
-                  />
+                {hasRun ? (
 
-                  <XAxis
-                    dataKey="topology"
-                    stroke="#657086"
-                    tickLine={false}
-                    axisLine={false}
-                    fontSize={11}
-                  />
+                  <ResponsiveContainer
+                    width="100%"
+                    height="100%"
+                  >
 
-                  <YAxis
-                    stroke="#657086"
-                    tickLine={false}
-                    axisLine={false}
-                    fontSize={11}
-                  />
+                    <BarChart
+                      data={
+                        predictionChartData
+                      }
 
-                  <Tooltip
-                    contentStyle={{
-                      background: "#12172a",
-                      border:
-                        "1px solid rgba(255,255,255,0.1)",
-                      borderRadius: "10px",
-                      color: "#fff",
-                    }}
-                  />
+                      margin={{
+                        top: 20,
+                        right: 10,
+                        left: 0,
+                        bottom: 10,
+                      }}
 
-                  <Legend
-                    wrapperStyle={{
-                      fontSize: "10px",
-                    }}
-                  />
+                      barGap={6}
 
-                  <Bar
-                    dataKey="predicted"
-                    name="AI Predicted"
-                    fill="#9b7cff"
-                    radius={[5, 5, 0, 0]}
-                  />
+                      barCategoryGap="25%"
+                    >
 
-                  <Bar
-                    dataKey="actual"
-                    name="Actual"
-                    fill="#39d98a"
-                    radius={[5, 5, 0, 0]}
-                  />
 
-                </BarChart>
+                      <CartesianGrid
+                        strokeDasharray="3 3"
+                        opacity={0.15}
+                      />
 
-              </ResponsiveContainer>
+
+                      <XAxis
+                        dataKey="topology"
+
+                        tick={{
+                          fill: "#687487",
+                          fontSize: 11,
+                        }}
+
+                        axisLine={{
+                          stroke:
+                            "rgba(255,255,255,0.12)",
+                        }}
+
+                        tickLine={false}
+                      />
+
+
+                      <YAxis
+
+                        tick={{
+                          fill: "#687487",
+                          fontSize: 11,
+                        }}
+
+                        axisLine={{
+                          stroke:
+                            "rgba(255,255,255,0.12)",
+                        }}
+
+                        tickLine={false}
+                      />
+
+
+                      <Tooltip
+
+                        contentStyle={{
+                          backgroundColor:
+                            "#111722",
+
+                          border:
+                            "1px solid rgba(255,255,255,0.1)",
+
+                          borderRadius:
+                            "8px",
+
+                          color:
+                            "#e8edf5",
+
+                          boxShadow:
+                            "0 10px 30px rgba(0,0,0,0.35)",
+                        }}
+
+                        labelStyle={{
+                          color:
+                            "#ffffff",
+
+                          fontWeight:
+                            600,
+
+                          marginBottom:
+                            "5px",
+                        }}
+
+                        itemStyle={{
+                          color:
+                            "#dce2ed",
+                        }}
+
+                        cursor={{
+                          fill:
+                            "rgba(255,255,255,0.03)",
+                        }}
+                      />
+
+
+                      <Legend
+
+                        verticalAlign="bottom"
+
+                        height={32}
+
+                        iconType="circle"
+
+                        wrapperStyle={{
+                          color:
+                            "#8d98aa",
+
+                          fontSize:
+                            "11px",
+
+                          paddingTop:
+                            "8px",
+                        }}
+                      />
+
+
+                      <Bar
+
+                        dataKey="predicted"
+
+                        name="AI Predicted"
+
+                        fill="#6d78ff"
+
+                        stroke="#6d78ff"
+
+                        strokeWidth={1}
+
+                        radius={[
+                          6,
+                          6,
+                          0,
+                          0
+                        ]}
+
+                        maxBarSize={42}
+                      />
+
+
+                      <Bar
+
+                        dataKey="actual"
+
+                        name="Actual"
+
+                        fill="#35c9b0"
+
+                        stroke="#35c9b0"
+
+                        strokeWidth={1}
+
+                        radius={[
+                          6,
+                          6,
+                          0,
+                          0
+                        ]}
+
+                        maxBarSize={42}
+                      />
+
+
+                    </BarChart>
+
+                  </ResponsiveContainer>
+
+                ) : (
+
+                  <EmptyChart />
+
+                )}
+
+              </div>
 
             </div>
 
@@ -1124,76 +1576,122 @@ function App() {
 
         {/* VERIFICATION */}
 
-        <section
-          className={`verification-card ${
-            isCorrect ? "verified" : "not-verified"
-          }`}
-        >
+        <section className="section">
 
-          <div className="verification-icon">
 
-            {isCorrect ? (
-              <CheckCircle2 size={27} />
-            ) : (
-              <CircleDot size={27} />
-            )}
+          <div className="section-heading">
+
+            <div>
+
+              <div className="section-kicker">
+                05 / VERIFICATION
+              </div>
+
+              <h2>
+                AI vs Simulation
+              </h2>
+
+            </div>
 
           </div>
 
 
-          <div className="verification-main">
+          <div
+            className={
+              `verification-card ${
+                verification?.correct
+                  ? "correct"
+                  : verification
+                    ? "review"
+                    : ""
+              }`
+            }
+          >
 
-            <div className="verification-label">
 
-              {isCorrect
-                ? "AI PREDICTION VERIFIED"
-                : "AI PREDICTION REQUIRES REVIEW"}
+            <div className="verification-icon">
+
+
+              {verification?.correct ? (
+
+                <CheckCircle2 size={30} />
+
+              ) : (
+
+                <AlertCircle size={30} />
+
+              )}
 
             </div>
 
 
-            <h3>
+            <div className="verification-content">
 
-              AI selected{" "}
-              <strong>
-                {topologyInfo[aiBest].name}
-              </strong>
 
-              <span className="verification-arrow">
-                →
+              <span className="muted-label">
+                Prediction verification
               </span>
 
-              Actual best{" "}
-              <strong>
-                {topologyInfo[actualBest].name}
-              </strong>
 
-            </h3>
+              <h3>
 
+                {verification
 
-            <p>
+                  ? verification.correct
+                    ? "AI prediction verified"
+                    : "AI prediction requires review"
 
-              {isCorrect
-                ? "The topology recommended by the Random Forest model matches the topology with the lowest measured burst time."
-                : "The AI recommendation differs from the topology with the lowest measured burst time."}
+                  : "Run an analysis to verify the AI model"}
 
-            </p>
-
-          </div>
+              </h3>
 
 
-          <div className="verification-badge">
+              <p>
 
-            {isCorrect ? (
-              <>
-                <CheckCircle2 size={15} />
-                CORRECT
-              </>
-            ) : (
-              <>
-                <CircleDot size={15} />
-                REVIEW
-              </>
+                {verification
+
+                  ? `AI selected ${verification.ai_selected.toUpperCase()} while simulation identified ${verification.actual_best.toUpperCase()} as the actual best topology.`
+
+                  : "The system compares the AI prediction with the actual simulation result."}
+
+              </p>
+
+            </div>
+
+
+            {verification && (
+
+              <div className="verification-result">
+
+
+                <div>
+
+                  <span>
+                    AI
+                  </span>
+
+                  <strong>
+                    {verification.ai_selected.toUpperCase()}
+                  </strong>
+
+                </div>
+
+
+                <div>
+
+                  <span>
+                    Actual
+                  </span>
+
+                  <strong>
+                    {verification.actual_best.toUpperCase()}
+                  </strong>
+
+                </div>
+
+
+              </div>
+
             )}
 
           </div>
@@ -1201,20 +1699,23 @@ function App() {
         </section>
 
 
-        {/* ANALYSIS SUMMARY */}
+        {/* SUMMARY */}
 
-        <section className="summary-section">
+        <section className="section">
 
-          <div className="summary-heading">
+
+          <div className="section-heading">
 
             <div>
-              <span>ANALYSIS SUMMARY</span>
-              <h3>Current Experiment</h3>
-            </div>
 
-            <div className="summary-time">
-              <Clock3 size={14} />
-              Latest run
+              <div className="section-kicker">
+                06 / ANALYSIS SUMMARY
+              </div>
+
+              <h2>
+                Experiment Summary
+              </h2>
+
             </div>
 
           </div>
@@ -1222,67 +1723,616 @@ function App() {
 
           <div className="summary-grid">
 
-            <div>
-              <span>Nodes</span>
-              <strong>{nodes}</strong>
-            </div>
 
-            <div>
-              <span>Pattern</span>
-              <strong>{pattern}</strong>
-            </div>
+            <SummaryItem
+              label="Nodes"
+              value={nodes}
+            />
 
-            <div>
-              <span>Requests</span>
-              <strong>{requests}</strong>
-            </div>
 
-            <div>
-              <span>Workers</span>
-              <strong>{workers}</strong>
-            </div>
+            <SummaryItem
+              label="Pattern"
+              value={
+                pattern
+                  .charAt(0)
+                  .toUpperCase()
+                  + pattern.slice(1)
+              }
+            />
 
-            <div>
-              <span>AI Model</span>
-              <strong>Random Forest</strong>
-            </div>
 
-            <div>
-              <span>Recommended</span>
-              <strong className="summary-best">
-                {topologyInfo[aiBest].name}
-              </strong>
-            </div>
+            <SummaryItem
+              label="Requests"
+              value={requests}
+            />
+
+
+            <SummaryItem
+              label="Workers"
+              value={workers}
+            />
+
+
+            <SummaryItem
+              label="AI Model"
+              value="Random Forest"
+            />
+
+
+            <SummaryItem
+              label="Recommended"
+              value={
+                aiBest
+                  ? aiBest.toUpperCase()
+                  : "—"
+              }
+            />
+
 
           </div>
 
         </section>
-
 
       </main>
 
 
       <footer className="footer">
 
-        <div className="footer-brand">
-
-          <div className="footer-dot" />
-
+        <span>
           AI Network Selector
+        </span>
 
-        </div>
-
-        <div>
-          Distributed & Parallel Computing
-        </div>
-
-        <div>
-          Case Study 09
-        </div>
+        <span>
+          Interconnection Network Selection
+          · Parallel Computing
+        </span>
 
       </footer>
 
     </div>
+  );
+}
+
+
+/* --------------------------------------------------
+   SMALL COMPONENTS
+-------------------------------------------------- */
+
+
+function Stat({
+  label,
+  value
+}) {
+
+  return (
+
+    <div className="topology-stat">
+
+      <span>
+        {label}
+      </span>
+
+      <strong>
+        {value}
+      </strong>
+
+    </div>
+
+  );
+}
+
+
+function PerformanceCard({
+  icon: Icon,
+  label,
+  value
+}) {
+
+  return (
+
+    <div className="performance-card">
+
+      <div className="performance-icon">
+
+        <Icon size={19} />
+
+      </div>
+
+
+      <span>
+        {label}
+      </span>
+
+
+      <strong>
+        {value}
+      </strong>
+
+    </div>
+
+  );
+}
+
+
+function SummaryItem({
+  label,
+  value
+}) {
+
+  return (
+
+    <div className="summary-item">
+
+      <span>
+        {label}
+      </span>
+
+
+      <strong>
+        {value}
+      </strong>
+
+    </div>
+
+  );
+}
+
+
+function EmptyChart() {
+
+  return (
+
+    <div className="empty-chart">
+
+      <Activity size={24} />
+
+      <span>
+        Run analysis to generate chart data
+      </span>
+
+    </div>
+
+  );
+}
+
+
+/* --------------------------------------------------
+   TOPOLOGY DIAGRAMS
+-------------------------------------------------- */
+
+
+function TopologyDiagram({
+  type
+}) {
+
+  if (type === "ring") {
+
+    return (
+
+      <svg
+        viewBox="0 0 240 130"
+        className="topology-svg"
+      >
+
+        <rect
+          x="45"
+          y="25"
+          width="150"
+          height="80"
+          rx="40"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          opacity="0.6"
+        />
+
+
+        <Node
+          x="45"
+          y="65"
+          label="0"
+        />
+
+
+        <Node
+          x="120"
+          y="25"
+          label="1"
+        />
+
+
+        <Node
+          x="195"
+          y="65"
+          label="2"
+        />
+
+
+        <Node
+          x="120"
+          y="105"
+          label="3"
+        />
+
+      </svg>
+
+    );
+  }
+
+
+  if (type === "mesh") {
+
+    return (
+
+      <svg
+        viewBox="0 0 240 150"
+        className="topology-svg"
+      >
+
+        <line
+          x1="55"
+          y1="35"
+          x2="120"
+          y2="35"
+        />
+
+        <line
+          x1="120"
+          y1="35"
+          x2="185"
+          y2="35"
+        />
+
+
+        <line
+          x1="55"
+          y1="75"
+          x2="120"
+          y2="75"
+        />
+
+        <line
+          x1="120"
+          y1="75"
+          x2="185"
+          y2="75"
+        />
+
+
+        <line
+          x1="55"
+          y1="115"
+          x2="120"
+          y2="115"
+        />
+
+        <line
+          x1="120"
+          y1="115"
+          x2="185"
+          y2="115"
+        />
+
+
+        <line
+          x1="55"
+          y1="35"
+          x2="55"
+          y2="75"
+        />
+
+        <line
+          x1="55"
+          y1="75"
+          x2="55"
+          y2="115"
+        />
+
+
+        <line
+          x1="120"
+          y1="35"
+          x2="120"
+          y2="75"
+        />
+
+        <line
+          x1="120"
+          y1="75"
+          x2="120"
+          y2="115"
+        />
+
+
+        <line
+          x1="185"
+          y1="35"
+          x2="185"
+          y2="75"
+        />
+
+        <line
+          x1="185"
+          y1="75"
+          x2="185"
+          y2="115"
+        />
+
+
+        <Node
+          x="55"
+          y="35"
+          label="0"
+        />
+
+        <Node
+          x="120"
+          y="35"
+          label="1"
+        />
+
+        <Node
+          x="185"
+          y="35"
+          label="2"
+        />
+
+
+        <Node
+          x="55"
+          y="75"
+          label="3"
+        />
+
+        <Node
+          x="120"
+          y="75"
+          label="4"
+        />
+
+        <Node
+          x="185"
+          y="75"
+          label="5"
+        />
+
+
+        <Node
+          x="55"
+          y="115"
+          label="6"
+        />
+
+        <Node
+          x="120"
+          y="115"
+          label="7"
+        />
+
+        <Node
+          x="185"
+          y="115"
+          label="8"
+        />
+
+      </svg>
+
+    );
+  }
+
+
+  return (
+
+    <svg
+      viewBox="0 0 240 150"
+      className="topology-svg"
+    >
+
+      <line
+        x1="55"
+        y1="35"
+        x2="120"
+        y2="35"
+      />
+
+      <line
+        x1="120"
+        y1="35"
+        x2="185"
+        y2="35"
+      />
+
+
+      <line
+        x1="55"
+        y1="75"
+        x2="120"
+        y2="75"
+      />
+
+      <line
+        x1="120"
+        y1="75"
+        x2="185"
+        y2="75"
+      />
+
+
+      <line
+        x1="55"
+        y1="115"
+        x2="120"
+        y2="115"
+      />
+
+      <line
+        x1="120"
+        y1="115"
+        x2="185"
+        y2="115"
+      />
+
+
+      <line
+        x1="55"
+        y1="35"
+        x2="55"
+        y2="75"
+      />
+
+      <line
+        x1="55"
+        y1="75"
+        x2="55"
+        y2="115"
+      />
+
+
+      <line
+        x1="120"
+        y1="35"
+        x2="120"
+        y2="75"
+      />
+
+      <line
+        x1="120"
+        y1="75"
+        x2="120"
+        y2="115"
+      />
+
+
+      <line
+        x1="185"
+        y1="35"
+        x2="185"
+        y2="75"
+      />
+
+      <line
+        x1="185"
+        y1="75"
+        x2="185"
+        y2="115"
+      />
+
+
+      {/* Wrap-around indicators */}
+
+      <path
+        d="M55 20 C15 20, 15 130, 55 130"
+        fill="none"
+        stroke="currentColor"
+        strokeDasharray="5 5"
+        opacity="0.45"
+      />
+
+
+      <path
+        d="M185 20 C225 20, 225 130, 185 130"
+        fill="none"
+        stroke="currentColor"
+        strokeDasharray="5 5"
+        opacity="0.45"
+      />
+
+
+      <Node
+        x="55"
+        y="35"
+        label="0"
+      />
+
+      <Node
+        x="120"
+        y="35"
+        label="1"
+      />
+
+      <Node
+        x="185"
+        y="35"
+        label="2"
+      />
+
+
+      <Node
+        x="55"
+        y="75"
+        label="3"
+      />
+
+      <Node
+        x="120"
+        y="75"
+        label="4"
+      />
+
+      <Node
+        x="185"
+        y="75"
+        label="5"
+      />
+
+
+      <Node
+        x="55"
+        y="115"
+        label="6"
+      />
+
+      <Node
+        x="120"
+        y="115"
+        label="7"
+      />
+
+      <Node
+        x="185"
+        y="115"
+        label="8"
+      />
+
+    </svg>
+
+  );
+}
+
+
+function Node({
+  x,
+  y,
+  label
+}) {
+
+  return (
+
+    <g>
+
+      <circle
+        cx={x}
+        cy={y}
+        r="9"
+        fill="currentColor"
+        opacity="0.9"
+      />
+
+
+      <text
+        x={x}
+        y={y + 4}
+        textAnchor="middle"
+        fontSize="8"
+        fill="white"
+      >
+
+        {label}
+
+      </text>
+
+    </g>
+
   );
 }
 
